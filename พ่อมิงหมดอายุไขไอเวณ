@@ -31,22 +31,18 @@ local Settings = {
 }
 
 local isKeyVerified = false
-local _KEY_HASH = 0x040ac41d
-local _KEY_LEN = 9
+local _AUTH_PATTERN = { 468, 570, 555, 531, 552, 567, 366, 363, 363 }
 
 local function VerifySecurityKey(inputKey)
-    if typeof(inputKey) ~= "string" or #inputKey ~= _KEY_LEN then
+    if typeof(inputKey) ~= "string" or #inputKey ~= #_AUTH_PATTERN then
         return false
     end
-    local h = 2166136261
-    local salt = "SPH_TCT_2026"
-    for i = 1, #inputKey do
-        h = bit32.band(bit32.bxor(h, string.byte(inputKey, i)) * 16777619, 0xFFFFFFFF)
+    for i = 1, #_AUTH_PATTERN do
+        if (string.byte(inputKey, i) + 73) * 3 ~= _AUTH_PATTERN[i] then
+            return false
+        end
     end
-    for i = 1, #salt do
-        h = bit32.band(bit32.bxor(h, string.byte(salt, i)) * 16777619, 0xFFFFFFFF)
-    end
-    return h == _KEY_HASH
+    return true
 end
 
 -- ----------------------------------------------------

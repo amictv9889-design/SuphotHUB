@@ -31,18 +31,17 @@ local Settings = {
 }
 
 local isKeyVerified = false
-local _AUTH_PATTERN = { 468, 570, 555, 531, 552, 567, 366, 363, 363 }
+local _K = { 183, 217, 212, 204, 211, 216, 149, 148, 148 }
 
 local function VerifySecurityKey(inputKey)
-    if typeof(inputKey) ~= "string" or #inputKey ~= #_AUTH_PATTERN then
-        return false
+    if typeof(inputKey) ~= "string" then return false end
+    local cleaned = string.lower(string.gsub(inputKey, "[^%w]", ""))
+    local targetChars = {}
+    for i = 1, #_K do
+        targetChars[i] = string.char(_K[i] - 100)
     end
-    for i = 1, #_AUTH_PATTERN do
-        if (string.byte(inputKey, i) + 73) * 3 ~= _AUTH_PATTERN[i] then
-            return false
-        end
-    end
-    return true
+    local target = string.lower(table.concat(targetChars))
+    return cleaned == target
 end
 
 -- ----------------------------------------------------

@@ -1,0 +1,1219 @@
+--!strict
+-- TacticalHub V18: Obsidian Prism Edition (Peak Tier Cyber Aesthetics)
+-- Hotkeys: ปุ่มเริ่มต้นคือ Right Shift (กดเปลี่ยนปุ่มบนหน้าเมนูได้ตลอดเวลา)
+
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local UserInputService = game:GetService("UserInputService")
+local TweenService = game:GetService("TweenService")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local Workspace = game:GetService("Workspace")
+
+local LocalPlayer = Players.LocalPlayer
+local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
+
+-- ----------------------------------------------------
+-- สถานะการทำงานของระบบ (Configuration State)
+-- ----------------------------------------------------
+local Settings = {
+    MenuVisible = false, -- ซ่อนเมนูเริ่มต้น รอการปลดล็อคด้วยคีย์
+    ESP = false,
+    Aimlock = false,
+    Snapline = true,
+    AimlockDistance = 150, -- ระยะล็อก (เมตร)
+    AimlockFOV = 140, -- รัศมีวงกลม FOV (พิกเซล)
+    StraightBullet = true, -- กระสุนเลเซอร์ตรง ไร้การกระจาย
+    BodyToHead = true, -- ยิงโดนตัวแต่สแนปเข้าหัวจริง 100%
+    MenuKey = Enum.KeyCode.RightShift,
+    ESPColor = Color3.fromRGB(255, 65, 80),
+    FOVColor = Color3.fromRGB(0, 245, 212),
+    SnaplineColor = Color3.fromRGB(0, 245, 212)
+}
+
+local isKeyVerified = false
+local TARGET_KEY = "Suphot100" 
+
+-- ----------------------------------------------------
+-- 1. Hook ระบบกระสุนตรง 100% ไร้การกระจาย (Zero Dispersion Laser)
+-- ----------------------------------------------------
+local GunController = nil
+local HitboxController = nil
+local WeaponRules = nil
+local WeaponsSharedConfig = nil
+local MovementSharedConfig = nil
+
+pcall(function()
+    local playerScripts = LocalPlayer:WaitForChild("PlayerScripts")
+    local features = playerScripts:FindFirstChild("Features")
+    
+    if features then
+        local weaponsFolder = features:FindFirstChild("Weapons")
+        if weaponsFolder and weaponsFolder:FindFirstChild("GunController") then
+            GunController = require(weaponsFolder.GunController)
+        end
+
+        local combatFolder = features:FindFirstChild("Combat")
+        if combatFolder and combatFolder:FindFirstChild("HitboxController") then
+            HitboxController = require(combatFolder.HitboxController)
+        end
+    end
+
+    WeaponRules = require(ReplicatedStorage.Features.Weapons.WeaponRules)
+    WeaponsSharedConfig = require(ReplicatedStorage.Features.Weapons.WeaponsSharedConfig)
+    MovementSharedConfig = require(ReplicatedStorage.Features.Movement.MovementSharedConfig)
+end)
+
+local metersToStuds = (MovementSharedConfig and MovementSharedConfig.MetersToStuds) or 3.5714285714285716
+
+if WeaponRules then
+    WeaponRules.ApplySpread = function(dir, ...)
+        if Settings.StraightBullet then return dir.Unit end
+        return (CFrame.Angles(0, 0, 0)):VectorToWorldSpace(dir)
+    end
+    WeaponRules.GetSpreadAngle = function(...) return 0 end
+    WeaponRules.GetEffectiveSpread = function(...) return 0 end
+    WeaponRules.AddShotSpread = function(...) return 0 end
+    WeaponRules.GetBaseSpread = function(...) return 0 end
+
+    local rawStepBullet = WeaponRules.StepBullet
+    WeaponRules.StepBullet = function(pos, vel, mass, grav, dt)
+        if Settings.StraightBullet then
+            return pos + (vel * dt), vel
+        end
+        return rawStepBullet(pos, vel, mass, grav, dt)
+    end
+end
+
+if GunController then
+    local rawKick = GunController._Kick
+    GunController._Kick = function(self, ...)
+        if Settings.StraightBullet then
+            if self._recoil then
+                self._recoil.Target = Vector2.zero
+                self._recoil.Mod = Vector2.zero
+                self._recoil.Perm = Vector2.zero
+                self._recoil.Cooldown = 0
+            end
+            self._spread = 0
+            self._swayMod = Vector2.zero
+            return
+        end
+        return rawKick(self, ...)
+    end
+
+    GunController._StepSniperSway = function(self, ...)
+        if Settings.StraightBullet then
+            self._swayMod = Vector2.zero
+            self._swayTime = 0
+            return
+        end
+    end
+
+    GunController._devShotHook = function(data)
+        if Settings.StraightBullet and data and data.Ray then
+            return {
+                Ray = data.Ray,
+                Direction = data.Ray.Direction.Unit,
+                SpreadAngle = 0
+            }
+        end
+        return data
+    end
+end
+
+RunService.RenderStepped:Connect(function()
+    if Settings.StraightBullet then
+        if WeaponsSharedConfig and WeaponsSharedConfig.Firing then
+            WeaponsSharedConfig.Firing.BulletGravity = 0
+            WeaponsSharedConfig.Firing.RecoilGlobalFactor = 0
+            WeaponsSharedConfig.Firing.SpreadMaxAngle = 0
+            WeaponsSharedConfig.Firing.SpreadDistance = 999999
+            WeaponsSharedConfig.Firing.SniperSwayScale = 0
+            WeaponsSharedConfig.Firing.SniperSwayYawFactor = 0
+        end
+
+        if GunController then
+            if GunController._recoil then
+                GunController._recoil.Target = Vector2.zero
+                GunController._recoil.Mod = Vector2.zero
+                GunController._recoil.Perm = Vector2.zero
+                GunController._recoil.Cooldown = 0
+            end
+            GunController._swayMod = Vector2.zero
+            GunController._spread = 0
+        end
+    end
+end)
+
+-- ----------------------------------------------------
+-- 2. Hook ระบบ Snap เข้าหัว (True Coordinate Headshot)
+-- ----------------------------------------------------
+local function GetTargetHeadPosition(char)
+    if not char then return nil end
+
+    if HitboxController and HitboxController._boxes and HitboxController._boxes[char] then
+        for _, boxData in ipairs(HitboxController._boxes[char]) do
+            if boxData.Hitbox and (boxData.Hitbox.Name == "Bip01_Head" or boxData.Hitbox.BodyPart == 1) then
+                if boxData.Part then return boxData.Part.Position end
+            end
+        end
+    end
+
+    local headBone = char:FindFirstChild("Bip01_Head", true)
+    if headBone and headBone:IsA("Bone") then
+        return headBone.TransformedWorldCFrame.Position
+    end
+
+    local headPart = char:FindFirstChild("Head")
+    if headPart and headPart:IsA("BasePart") then
+        return headPart.Position
+    end
+
+    local root = char:FindFirstChild("HumanoidRootPart") or char:FindFirstChild("Torso")
+    if root and root:IsA("BasePart") then
+        return root.Position + Vector3.new(0, 2.2, 0)
+    end
+
+    return nil
+end
+
+if GunController then
+    local rawReportHit = GunController._ReportHit
+    if rawReportHit then
+        GunController._ReportHit = function(self, bullet, target, hitPos, bodyPart, mass)
+            if Settings.BodyToHead and target then
+                local char = target.Character or (typeof(target) == "Instance" and (target:IsA("Model") and target or target.Parent))
+                local realHeadPos = GetTargetHeadPosition(char)
+                if realHeadPos then
+                    hitPos = realHeadPos
+                    bodyPart = "Head"
+                else
+                    bodyPart = "Head"
+                end
+            end
+            return rawReportHit(self, bullet, target, hitPos, bodyPart, mass)
+        end
+    end
+end
+
+if HitboxController then
+    local rawResolve = HitboxController.Resolve
+    if rawResolve then
+        HitboxController.Resolve = function(self, instance)
+            local res = rawResolve(self, instance)
+            if Settings.BodyToHead and res and res.Target and res.Target ~= LocalPlayer then
+                return {
+                    Target = res.Target,
+                    BodyPart = "Head"
+                }
+            end
+            return res
+        end
+    end
+end
+
+-- ----------------------------------------------------
+-- 3. ระบบ Overlay: FOV Circle + Target Snapline
+-- ----------------------------------------------------
+local OverlayGui = Instance.new("ScreenGui")
+OverlayGui.Name = "TacticalOverlayV18"
+OverlayGui.ResetOnSpawn = false
+OverlayGui.IgnoreGuiInset = true
+OverlayGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+
+pcall(function()
+    OverlayGui.Parent = PlayerGui
+end)
+
+local FOVCircle = Instance.new("Frame")
+FOVCircle.Name = "FOVCircle"
+FOVCircle.AnchorPoint = Vector2.new(0.5, 0.5)
+FOVCircle.Position = UDim2.new(0.5, 0, 0.5, 0)
+FOVCircle.BackgroundTransparency = 1
+FOVCircle.BorderSizePixel = 0
+FOVCircle.Visible = false
+FOVCircle.Parent = OverlayGui
+
+local FOVCorner = Instance.new("UICorner")
+FOVCorner.CornerRadius = UDim.new(1, 0)
+FOVCorner.Parent = FOVCircle
+
+local FOVStroke = Instance.new("UIStroke")
+FOVStroke.Color = Settings.FOVColor
+FOVStroke.Thickness = 1.5
+FOVStroke.Transparency = 0.2
+FOVStroke.Parent = FOVCircle
+
+local SnaplineFrame = Instance.new("Frame")
+SnaplineFrame.Name = "Snapline"
+SnaplineFrame.AnchorPoint = Vector2.new(0.5, 0.5)
+SnaplineFrame.BackgroundColor3 = Settings.SnaplineColor
+SnaplineFrame.BorderSizePixel = 0
+SnaplineFrame.Visible = false
+SnaplineFrame.Parent = OverlayGui
+
+local function Update2DLine(line, pointA, pointB)
+    local distance = (pointB - pointA).Magnitude
+    local center = (pointA + pointB) / 2
+    local angle = math.deg(math.atan2(pointB.Y - pointA.Y, pointB.X - pointA.X))
+    line.Size = UDim2.new(0, distance, 0, 1.5)
+    line.Position = UDim2.new(0, center.X, 0, center.Y)
+    line.Rotation = angle
+    line.Visible = true
+end
+
+local function GetClosestTargetHeadWithDistance()
+    local bestHeadPos = nil
+    local bestChar = nil
+    local minFovDistance = Settings.AimlockFOV
+    local camera = Workspace.CurrentCamera
+    if not camera then return nil, nil end
+
+    local myChar = LocalPlayer.Character
+    local myRoot = myChar and myChar:FindFirstChild("HumanoidRootPart")
+    if not myRoot then return nil, nil end
+
+    local viewportSize = camera.ViewportSize
+    local screenCenter = Vector2.new(viewportSize.X / 2, viewportSize.Y / 2)
+
+    for _, player in ipairs(Players:GetPlayers()) do
+        if player ~= LocalPlayer and player.Character then
+            local char = player.Character
+            local hum = char:FindFirstChildOfClass("Humanoid")
+
+            if hum and hum.Health > 0 then
+                local headPos = GetTargetHeadPosition(char)
+                if headPos then
+                    local meterDistance = (headPos - myRoot.Position).Magnitude / metersToStuds
+                    
+                    if meterDistance <= Settings.AimlockDistance then
+                        local screenPos, onScreen = camera:WorldToViewportPoint(headPos)
+                        
+                        if onScreen then
+                            local screenDist = (Vector2.new(screenPos.X, screenPos.Y) - screenCenter).Magnitude
+                            
+                            if screenDist <= Settings.AimlockFOV and screenDist < minFovDistance then
+                                minFovDistance = screenDist
+                                bestHeadPos = headPos
+                                bestChar = char
+                            end
+                        end
+                    end
+                end
+            end
+        end
+    end
+
+    return bestHeadPos, bestChar
+end
+
+local CurrentTargetChar = nil
+
+RunService.RenderStepped:Connect(function()
+    local camera = Workspace.CurrentCamera
+    if not camera then return end
+
+    local viewportSize = camera.ViewportSize
+    local screenCenter = Vector2.new(viewportSize.X / 2, viewportSize.Y / 2)
+
+    FOVCircle.Size = UDim2.new(0, Settings.AimlockFOV * 2, 0, Settings.AimlockFOV * 2)
+    FOVCircle.Visible = Settings.Aimlock
+
+    local activeHeadPos = nil
+
+    if isKeyVerified and Settings.Aimlock and UserInputService:IsMouseButtonPressed(Enum.UserInputType.MouseButton2) then
+        local isValid = false
+        if CurrentTargetChar and CurrentTargetChar.Parent then
+            local hum = CurrentTargetChar:FindFirstChildOfClass("Humanoid")
+            if hum and hum.Health > 0 then
+                local headPos = GetTargetHeadPosition(CurrentTargetChar)
+                if headPos then
+                    local screenPos, onScreen = camera:WorldToViewportPoint(headPos)
+                    if onScreen then
+                        local screenDist = (Vector2.new(screenPos.X, screenPos.Y) - screenCenter).Magnitude
+                        if screenDist <= Settings.AimlockFOV * 1.5 then
+                            isValid = true
+                            activeHeadPos = headPos
+                        end
+                    end
+                end
+            end
+        end
+
+        if not isValid then
+            activeHeadPos, CurrentTargetChar = GetClosestTargetHeadWithDistance()
+        end
+
+        if activeHeadPos then
+            camera.CFrame = CFrame.lookAt(camera.CFrame.Position, activeHeadPos)
+        end
+    else
+        CurrentTargetChar = nil
+    end
+
+    if Settings.Aimlock and Settings.Snapline and activeHeadPos then
+        local screenPos, onScreen = camera:WorldToViewportPoint(activeHeadPos)
+        if onScreen then
+            Update2DLine(SnaplineFrame, screenCenter, Vector2.new(screenPos.X, screenPos.Y))
+        else
+            SnaplineFrame.Visible = false
+        end
+    else
+        SnaplineFrame.Visible = false
+    end
+end)
+
+-- ----------------------------------------------------
+-- 4. ระบบ Enemy ESP
+-- ----------------------------------------------------
+local ESPCache = {}
+
+local function ClearESP(player)
+    if ESPCache[player] then
+        if ESPCache[player].Billboard then ESPCache[player].Billboard:Destroy() end
+        if ESPCache[player].Highlight then ESPCache[player].Highlight:Destroy() end
+        ESPCache[player] = nil
+    end
+end
+
+local function RegisterESP(player)
+    if player == LocalPlayer then return end
+    ClearESP(player)
+
+    local function onCharacterLoaded(char)
+        if not char then return end
+        local rootPart = char:WaitForChild("HumanoidRootPart", 5)
+        local humanoid = char:WaitForChild("Humanoid", 5)
+        if not rootPart or not humanoid then return end
+
+        local highlight = Instance.new("Highlight")
+        highlight.Name = "PlayerHighlight"
+        highlight.Adornee = char
+        highlight.FillColor = Settings.ESPColor
+        highlight.FillTransparency = 0.7
+        highlight.OutlineColor = Color3.fromRGB(255, 255, 255)
+        highlight.OutlineTransparency = 0.2
+        highlight.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+        highlight.Enabled = Settings.ESP
+        highlight.Parent = char
+
+        local billboard = Instance.new("BillboardGui")
+        billboard.Name = "PlayerInfo"
+        billboard.Adornee = rootPart
+        billboard.Size = UDim2.new(0, 160, 0, 45)
+        billboard.StudsOffset = Vector3.new(0, 3.5, 0)
+        billboard.AlwaysOnTop = true
+        billboard.Enabled = Settings.ESP
+
+        local label = Instance.new("TextLabel")
+        label.Size = UDim2.new(1, 0, 1, 0)
+        label.BackgroundTransparency = 1
+        label.TextColor3 = Settings.ESPColor
+        label.TextStrokeTransparency = 0
+        label.TextStrokeColor3 = Color3.fromRGB(0, 0, 0)
+        label.Font = Enum.Font.GothamBold
+        label.TextSize = 13
+        label.Text = player.DisplayName or player.Name
+        label.Parent = billboard
+
+        billboard.Parent = char
+
+        ESPCache[player] = {
+            Billboard = billboard,
+            Highlight = highlight,
+            Label = label,
+            Character = char,
+            Humanoid = humanoid,
+            Root = rootPart
+        }
+    end
+
+    if player.Character then task.spawn(onCharacterLoaded, player.Character) end
+    player.CharacterAdded:Connect(onCharacterLoaded)
+end
+
+RunService.Heartbeat:Connect(function()
+    if not isKeyVerified or not Settings.ESP then return end
+    local myChar = LocalPlayer.Character
+    local myRoot = myChar and myChar:FindFirstChild("HumanoidRootPart")
+
+    for player, data in pairs(ESPCache) do
+        if data.Character and data.Character.Parent and data.Root and data.Humanoid then
+            local dist = myRoot and math.floor((myRoot.Position - data.Root.Position).Magnitude / metersToStuds) or 0
+            local hp = math.max(0, math.floor(data.Humanoid.Health))
+            data.Label.Text = string.format("%s\n[%d HP] [%d m]", player.DisplayName, hp, dist)
+        end
+    end
+end)
+
+for _, p in ipairs(Players:GetPlayers()) do RegisterESP(p) end
+Players.PlayerAdded:Connect(RegisterESP)
+Players.PlayerRemoving:Connect(ClearESP)
+
+local function SetESPActive(isActive)
+    Settings.ESP = isActive
+    for _, data in pairs(ESPCache) do
+        if data.Billboard then data.Billboard.Enabled = isActive end
+        if data.Highlight then data.Highlight.Enabled = isActive end
+    end
+end
+
+-- ----------------------------------------------------
+-- 5. Obsidian Prism Elite UI
+-- ----------------------------------------------------
+local ScreenGui = Instance.new("ScreenGui")
+ScreenGui.Name = "TacticalObsidianPrism"
+ScreenGui.ResetOnSpawn = false
+ScreenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+
+pcall(function()
+    ScreenGui.Parent = PlayerGui
+end)
+
+-- Main Background Frame
+local MainFrame = Instance.new("Frame")
+MainFrame.Name = "MainFrame"
+MainFrame.Size = UDim2.new(0, 290, 0, 390)
+MainFrame.Position = UDim2.new(0.04, 0, 0.20, 0)
+MainFrame.BackgroundColor3 = Color3.fromRGB(13, 15, 20)
+MainFrame.BorderSizePixel = 0
+MainFrame.Active = true
+MainFrame.ClipsDescendants = true
+MainFrame.Visible = false -- ซ่อนหน้าเมนูไว้ จนกว่าจะใส่คีย์สำเร็จ
+MainFrame.Parent = ScreenGui
+
+local MainCorner = Instance.new("UICorner")
+MainCorner.CornerRadius = UDim.new(0, 12)
+MainCorner.Parent = MainFrame
+
+-- Gradient Border Glow (Cyan to Violet)
+local MainStroke = Instance.new("UIStroke")
+MainStroke.Thickness = 1.6
+MainStroke.Color = Color3.fromRGB(255, 255, 255)
+MainStroke.Parent = MainFrame
+
+local StrokeGradient = Instance.new("UIGradient")
+StrokeGradient.Color = ColorSequence.new({
+    ColorSequenceKeypoint.new(0, Color3.fromRGB(0, 245, 212)),
+    ColorSequenceKeypoint.new(0.5, Color3.fromRGB(123, 44, 191)),
+    ColorSequenceKeypoint.new(1, Color3.fromRGB(0, 245, 212))
+})
+StrokeGradient.Rotation = 45
+StrokeGradient.Parent = MainStroke
+
+-- Header Bar
+local Header = Instance.new("Frame")
+Header.Size = UDim2.new(1, 0, 0, 48)
+Header.BackgroundColor3 = Color3.fromRGB(18, 20, 28)
+Header.BorderSizePixel = 0
+Header.Parent = MainFrame
+
+local HeaderCorner = Instance.new("UICorner")
+HeaderCorner.CornerRadius = UDim.new(0, 12)
+HeaderCorner.Parent = Header
+
+-- Fixed square patch for header bottom corner
+local HeaderSquare = Instance.new("Frame")
+HeaderSquare.Size = UDim2.new(1, 0, 0, 12)
+HeaderSquare.Position = UDim2.new(0, 0, 1, -12)
+HeaderSquare.BackgroundColor3 = Color3.fromRGB(18, 20, 28)
+HeaderSquare.BorderSizePixel = 0
+HeaderSquare.Parent = Header
+
+local HeaderAccentLine = Instance.new("Frame")
+HeaderAccentLine.Size = UDim2.new(1, 0, 0, 1)
+HeaderAccentLine.Position = UDim2.new(0, 0, 1, 0)
+HeaderAccentLine.BackgroundColor3 = Color3.fromRGB(35, 40, 55)
+HeaderAccentLine.BorderSizePixel = 0
+HeaderAccentLine.Parent = Header
+
+local LiveBadge = Instance.new("TextLabel")
+LiveBadge.Size = UDim2.new(0, 52, 0, 18)
+LiveBadge.Position = UDim2.new(0, 14, 0.5, -9)
+LiveBadge.BackgroundColor3 = Color3.fromRGB(16, 185, 129)
+LiveBadge.BackgroundTransparency = 0.82
+LiveBadge.Text = "● ACTIVE"
+LiveBadge.Font = Enum.Font.GothamBold
+LiveBadge.TextSize = 9
+LiveBadge.TextColor3 = Color3.fromRGB(16, 185, 129)
+LiveBadge.Parent = Header
+Instance.new("UICorner", LiveBadge).CornerRadius = UDim.new(0, 4)
+
+local HeaderTitle = Instance.new("TextLabel")
+HeaderTitle.Size = UDim2.new(0.6, 0, 1, 0)
+HeaderTitle.Position = UDim2.new(0, 74, 0, 0)
+HeaderTitle.BackgroundTransparency = 1
+HeaderTitle.Text = "PROJECT SENTINEL"
+HeaderTitle.Font = Enum.Font.GothamBold
+HeaderTitle.TextSize = 12
+HeaderTitle.TextColor3 = Color3.fromRGB(240, 245, 255)
+HeaderTitle.TextXAlignment = Enum.TextXAlignment.Left
+HeaderTitle.Parent = Header
+
+local VersionTag = Instance.new("TextLabel")
+VersionTag.Size = UDim2.new(0, 42, 0, 18)
+VersionTag.Position = UDim2.new(1, -54, 0.5, -9)
+VersionTag.BackgroundColor3 = Color3.fromRGB(0, 245, 212)
+VersionTag.BackgroundTransparency = 0.85
+VersionTag.Text = "PRISM"
+VersionTag.Font = Enum.Font.GothamBold
+VersionTag.TextSize = 9
+VersionTag.TextColor3 = Color3.fromRGB(0, 245, 212)
+VersionTag.Parent = Header
+Instance.new("UICorner", VersionTag).CornerRadius = UDim.new(0, 4)
+
+-- Smooth Draggable Handler
+local isDragging = false
+local dragStart = Vector2.zero
+local startPos = UDim2.new()
+
+Header.InputBegan:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.MouseButton1 then
+        isDragging = true
+        dragStart = input.Position
+        startPos = MainFrame.Position
+    end
+end)
+
+UserInputService.InputChanged:Connect(function(input)
+    if isDragging and input.UserInputType == Enum.UserInputType.MouseMovement then
+        local delta = input.Position - dragStart
+        MainFrame.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + delta.X, startPos.Y.Scale, startPos.Y.Offset + delta.Y)
+    end
+end)
+
+UserInputService.InputEnded:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.MouseButton1 then
+        isDragging = false
+    end
+end)
+
+-- Button Container
+local ButtonContainer = Instance.new("Frame")
+ButtonContainer.Size = UDim2.new(0.92, 0, 0, 325)
+ButtonContainer.Position = UDim2.new(0.04, 0, 0, 56)
+ButtonContainer.BackgroundTransparency = 1
+ButtonContainer.Parent = MainFrame
+
+local ListLayout = Instance.new("UIListLayout")
+ListLayout.Padding = UDim.new(0, 6)
+ListLayout.HorizontalAlignment = Enum.HorizontalAlignment.Center
+ListLayout.SortOrder = Enum.SortOrder.LayoutOrder
+ListLayout.Parent = ButtonContainer
+
+-- Helper: สร้าง Animated Capsule Toggle Switch
+local function CreatePrismToggle(label, initialState, callback)
+    local card = Instance.new("TextButton")
+    card.Size = UDim2.new(1, 0, 0, 36)
+    card.BackgroundColor3 = Color3.fromRGB(18, 21, 30)
+    card.BorderSizePixel = 0
+    card.AutoButtonColor = false
+    card.Text = ""
+
+    local cCorner = Instance.new("UICorner")
+    cCorner.CornerRadius = UDim.new(0, 8)
+    cCorner.Parent = card
+
+    local cStroke = Instance.new("UIStroke")
+    cStroke.Color = Color3.fromRGB(28, 34, 48)
+    cStroke.Thickness = 1
+    cStroke.Parent = card
+
+    local titleLbl = Instance.new("TextLabel")
+    titleLbl.Size = UDim2.new(0.68, 0, 1, 0)
+    titleLbl.Position = UDim2.new(0, 12, 0, 0)
+    titleLbl.BackgroundTransparency = 1
+    titleLbl.Text = label
+    titleLbl.Font = Enum.Font.GothamSemibold
+    titleLbl.TextSize = 11
+    titleLbl.TextColor3 = Color3.fromRGB(215, 222, 235)
+    titleLbl.TextXAlignment = Enum.TextXAlignment.Left
+    titleLbl.Parent = card
+
+    -- Capsule Track
+    local track = Instance.new("Frame")
+    track.Size = UDim2.new(0, 38, 0, 20)
+    track.Position = UDim2.new(1, -48, 0.5, -10)
+    track.BackgroundColor3 = Color3.fromRGB(30, 35, 50)
+    track.BorderSizePixel = 0
+    track.Parent = card
+
+    local tCorner = Instance.new("UICorner")
+    tCorner.CornerRadius = UDim.new(1, 0)
+    tCorner.Parent = track
+
+    -- Sliding Knob Thumb
+    local thumb = Instance.new("Frame")
+    thumb.Size = UDim2.new(0, 14, 0, 14)
+    thumb.Position = UDim2.new(0, 3, 0.5, -7)
+    thumb.BackgroundColor3 = Color3.fromRGB(180, 185, 200)
+    thumb.BorderSizePixel = 0
+    thumb.Parent = track
+
+    local thCorner = Instance.new("UICorner")
+    thCorner.CornerRadius = UDim.new(1, 0)
+    thCorner.Parent = thumb
+
+    local active = initialState
+    local tweenInfo = TweenInfo.new(0.22, Enum.EasingStyle.Quart, Enum.EasingDirection.Out)
+
+    local function updateSwitch(animate)
+        local targetThumbPos = active and UDim2.new(1, -17, 0.5, -7) or UDim2.new(0, 3, 0.5, -7)
+        local targetTrackColor = active and Color3.fromRGB(16, 185, 129) or Color3.fromRGB(30, 35, 50)
+        local targetThumbColor = active and Color3.fromRGB(255, 255, 255) or Color3.fromRGB(180, 185, 200)
+        local targetBorderColor = active and Color3.fromRGB(16, 185, 129) or Color3.fromRGB(28, 34, 48)
+
+        if animate then
+            TweenService:Create(thumb, tweenInfo, { Position = targetThumbPos, BackgroundColor3 = targetThumbColor }):Play()
+            TweenService:Create(track, tweenInfo, { BackgroundColor3 = targetTrackColor }):Play()
+            TweenService:Create(cStroke, tweenInfo, { Color = targetBorderColor }):Play()
+        else
+            thumb.Position = targetThumbPos
+            thumb.BackgroundColor3 = targetThumbColor
+            track.BackgroundColor3 = targetTrackColor
+            cStroke.Color = targetBorderColor
+        end
+    end
+
+    card.MouseButton1Click:Connect(function()
+        active = not active
+        updateSwitch(true)
+        callback(active)
+    end)
+
+    updateSwitch(false)
+    card.Parent = ButtonContainer
+    return card
+end
+
+-- สร้าง 4 ปุ่ม Toggles ระดับพรีเมียม
+CreatePrismToggle("Enemy Visual Matrix (ESP)", Settings.ESP, function(v) SetESPActive(v) end)
+CreatePrismToggle("Hardware Aimlock [Hold RMB]", Settings.Aimlock, function(v) Settings.Aimlock = v end)
+CreatePrismToggle("Target Laser Snapline", Settings.Snapline, function(v) Settings.Snapline = v end)
+CreatePrismToggle("Redirect Cranial Damage", Settings.BodyToHead, function(v) Settings.BodyToHead = v end)
+
+-- คอนโทรลเลอร์ Stepper ปรับระยะหวังผล (Aim Range)
+local RangeCard = Instance.new("Frame")
+RangeCard.Size = UDim2.new(1, 0, 0, 36)
+RangeCard.BackgroundColor3 = Color3.fromRGB(18, 21, 30)
+RangeCard.BorderSizePixel = 0
+RangeCard.Parent = ButtonContainer
+
+Instance.new("UICorner", RangeCard).CornerRadius = UDim.new(0, 8)
+local rStroke = Instance.new("UIStroke")
+rStroke.Color = Color3.fromRGB(28, 34, 48)
+rStroke.Thickness = 1
+rStroke.Parent = RangeCard
+
+local RangeTitle = Instance.new("TextLabel")
+RangeTitle.Size = UDim2.new(0.6, 0, 1, 0)
+RangeTitle.Position = UDim2.new(0, 12, 0, 0)
+RangeTitle.BackgroundTransparency = 1
+RangeTitle.Font = Enum.Font.GothamSemibold
+RangeTitle.TextSize = 11
+RangeTitle.TextColor3 = Color3.fromRGB(215, 222, 235)
+RangeTitle.TextXAlignment = Enum.TextXAlignment.Left
+RangeTitle.Parent = RangeCard
+
+local function refreshRangeText()
+    RangeTitle.Text = string.format("Lock Distance: %d m", Settings.AimlockDistance)
+end
+refreshRangeText()
+
+local RMinus = Instance.new("TextButton")
+RMinus.Size = UDim2.new(0, 24, 0, 22)
+RMinus.Position = UDim2.new(1, -56, 0.5, -11)
+RMinus.BackgroundColor3 = Color3.fromRGB(28, 33, 48)
+RMinus.TextColor3 = Color3.fromRGB(255, 255, 255)
+RMinus.Text = "-"
+RMinus.Font = Enum.Font.GothamBold
+RMinus.TextSize = 14
+RMinus.BorderSizePixel = 0
+RMinus.Parent = RangeCard
+Instance.new("UICorner", RMinus).CornerRadius = UDim.new(0, 5)
+
+RMinus.MouseButton1Click:Connect(function()
+    Settings.AimlockDistance = math.max(25, Settings.AimlockDistance - 25)
+    refreshRangeText()
+end)
+
+local RPlus = Instance.new("TextButton")
+RPlus.Size = UDim2.new(0, 24, 0, 22)
+RPlus.Position = UDim2.new(1, -28, 0.5, -11)
+RPlus.BackgroundColor3 = Color3.fromRGB(28, 33, 48)
+RPlus.TextColor3 = Color3.fromRGB(255, 255, 255)
+RPlus.Text = "+"
+RPlus.Font = Enum.Font.GothamBold
+RPlus.TextSize = 14
+RPlus.BorderSizePixel = 0
+RPlus.Parent = RangeCard
+Instance.new("UICorner", RPlus).CornerRadius = UDim.new(0, 5)
+
+RPlus.MouseButton1Click:Connect(function()
+    Settings.AimlockDistance = math.min(600, Settings.AimlockDistance + 25)
+    refreshRangeText()
+end)
+
+-- คอนโทรลเลอร์ Stepper ปรับขนาดวงกลม (FOV Radius)
+local FOVCard = Instance.new("Frame")
+FOVCard.Size = UDim2.new(1, 0, 0, 36)
+FOVCard.BackgroundColor3 = Color3.fromRGB(18, 21, 30)
+FOVCard.BorderSizePixel = 0
+FOVCard.Parent = ButtonContainer
+
+Instance.new("UICorner", FOVCard).CornerRadius = UDim.new(0, 8)
+local fStroke = Instance.new("UIStroke")
+fStroke.Color = Color3.fromRGB(28, 34, 48)
+fStroke.Thickness = 1
+fStroke.Parent = FOVCard
+
+local FOVTitle = Instance.new("TextLabel")
+FOVTitle.Size = UDim2.new(0.6, 0, 1, 0)
+FOVTitle.Position = UDim2.new(0, 12, 0, 0)
+FOVTitle.BackgroundTransparency = 1
+FOVTitle.Font = Enum.Font.GothamSemibold
+FOVTitle.TextSize = 11
+FOVTitle.TextColor3 = Color3.fromRGB(215, 222, 235)
+FOVTitle.TextXAlignment = Enum.TextXAlignment.Left
+FOVTitle.Parent = FOVCard
+
+local function refreshFOVText()
+    FOVTitle.Text = string.format("FOV Radius: %d px", Settings.AimlockFOV)
+end
+refreshFOVText()
+
+local FMinus = Instance.new("TextButton")
+FMinus.Size = UDim2.new(0, 24, 0, 22)
+FMinus.Position = UDim2.new(1, -56, 0.5, -11)
+FMinus.BackgroundColor3 = Color3.fromRGB(28, 33, 48)
+FMinus.TextColor3 = Color3.fromRGB(255, 255, 255)
+FMinus.Text = "-"
+FMinus.Font = Enum.Font.GothamBold
+FMinus.TextSize = 14
+FMinus.BorderSizePixel = 0
+FMinus.Parent = FOVCard
+Instance.new("UICorner", FMinus).CornerRadius = UDim.new(0, 5)
+
+FMinus.MouseButton1Click:Connect(function()
+    Settings.AimlockFOV = math.max(60, Settings.AimlockFOV - 20)
+    refreshFOVText()
+end)
+
+local FPlus = Instance.new("TextButton")
+FPlus.Size = UDim2.new(0, 24, 0, 22)
+FPlus.Position = UDim2.new(1, -28, 0.5, -11)
+FPlus.BackgroundColor3 = Color3.fromRGB(28, 33, 48)
+FPlus.TextColor3 = Color3.fromRGB(255, 255, 255)
+FPlus.Text = "+"
+FPlus.Font = Enum.Font.GothamBold
+FPlus.TextSize = 14
+FPlus.BorderSizePixel = 0
+FPlus.Parent = FOVCard
+Instance.new("UICorner", FPlus).CornerRadius = UDim.new(0, 5)
+
+FPlus.MouseButton1Click:Connect(function()
+    Settings.AimlockFOV = math.min(450, Settings.AimlockFOV + 20)
+    refreshFOVText()
+end)
+
+-- คอนโทรลเลอร์ Rebind ปุ่มเปิด-ปิดเมนู
+local KeyCard = Instance.new("TextButton")
+KeyCard.Size = UDim2.new(1, 0, 0, 36)
+KeyCard.BackgroundColor3 = Color3.fromRGB(18, 21, 30)
+KeyCard.BorderSizePixel = 0
+KeyCard.AutoButtonColor = false
+KeyCard.Text = ""
+KeyCard.Parent = ButtonContainer
+
+Instance.new("UICorner", KeyCard).CornerRadius = UDim.new(0, 8)
+local kStroke = Instance.new("UIStroke")
+kStroke.Color = Color3.fromRGB(28, 34, 48)
+kStroke.Thickness = 1
+kStroke.Parent = KeyCard
+
+local KeyTitle = Instance.new("TextLabel")
+KeyTitle.Size = UDim2.new(0.55, 0, 1, 0)
+KeyTitle.Position = UDim2.new(0, 12, 0, 0)
+KeyTitle.BackgroundTransparency = 1
+KeyTitle.Text = "Menu Keybind"
+KeyTitle.Font = Enum.Font.GothamSemibold
+KeyTitle.TextSize = 11
+KeyTitle.TextColor3 = Color3.fromRGB(215, 222, 235)
+KeyTitle.TextXAlignment = Enum.TextXAlignment.Left
+KeyTitle.Parent = KeyCard
+
+local KeyPill = Instance.new("TextLabel")
+KeyPill.Size = UDim2.new(0, 82, 0, 22)
+KeyPill.Position = UDim2.new(1, -90, 0.5, -11)
+KeyPill.BackgroundColor3 = Color3.fromRGB(28, 33, 48)
+KeyPill.Font = Enum.Font.GothamBold
+KeyPill.TextSize = 10
+KeyPill.TextColor3 = Color3.fromRGB(0, 245, 212)
+KeyPill.Text = Settings.MenuKey.Name
+KeyPill.Parent = KeyCard
+Instance.new("UICorner", KeyPill).CornerRadius = UDim.new(0, 5)
+
+local isListeningKey = false
+
+KeyCard.MouseButton1Click:Connect(function()
+    if isListeningKey then return end
+    isListeningKey = true
+    KeyPill.Text = "[Press Key]"
+    KeyPill.TextColor3 = Color3.fromRGB(255, 210, 60)
+    kStroke.Color = Color3.fromRGB(255, 210, 60)
+end)
+
+UserInputService.InputBegan:Connect(function(input, gameProcessed)
+    if isListeningKey then
+        if input.UserInputType == Enum.UserInputType.Keyboard then
+            Settings.MenuKey = input.KeyCode
+            KeyPill.Text = input.KeyCode.Name
+            KeyPill.TextColor3 = Color3.fromRGB(0, 245, 212)
+            kStroke.Color = Color3.fromRGB(28, 34, 48)
+            isListeningKey = false
+        end
+        return
+    end
+
+    if gameProcessed then return end
+    if input.KeyCode == Settings.MenuKey then
+        if not isKeyVerified then return end -- ป้องกันการเปิดเมนูก่อนใส่คีย์
+        Settings.MenuVisible = not Settings.MenuVisible
+        MainFrame.Visible = Settings.MenuVisible
+    end
+end)
+
+-- ----------------------------------------------------
+-- 6. Obsidian Prism Key System (Authentication UI)
+-- ----------------------------------------------------
+local KeyFrame = Instance.new("Frame")
+KeyFrame.Name = "KeyAuthFrame"
+KeyFrame.Size = UDim2.new(0, 320, 0, 210)
+KeyFrame.AnchorPoint = Vector2.new(0.5, 0.5)
+KeyFrame.Position = UDim2.new(0.5, 0, 0.45, 0)
+KeyFrame.BackgroundColor3 = Color3.fromRGB(13, 15, 20)
+KeyFrame.BorderSizePixel = 0
+KeyFrame.Active = true
+KeyFrame.ClipsDescendants = true
+KeyFrame.ZIndex = 10
+KeyFrame.Parent = ScreenGui
+
+local KeyCorner = Instance.new("UICorner")
+KeyCorner.CornerRadius = UDim.new(0, 12)
+KeyCorner.Parent = KeyFrame
+
+local KeyStroke = Instance.new("UIStroke")
+KeyStroke.Thickness = 1.6
+KeyStroke.Color = Color3.fromRGB(255, 255, 255)
+KeyStroke.Parent = KeyFrame
+
+local KeyStrokeGrad = Instance.new("UIGradient")
+KeyStrokeGrad.Color = ColorSequence.new({
+    ColorSequenceKeypoint.new(0, Color3.fromRGB(0, 245, 212)),
+    ColorSequenceKeypoint.new(0.5, Color3.fromRGB(123, 44, 191)),
+    ColorSequenceKeypoint.new(1, Color3.fromRGB(0, 245, 212))
+})
+KeyStrokeGrad.Rotation = 45
+KeyStrokeGrad.Parent = KeyStroke
+
+-- Header
+local KeyHeader = Instance.new("Frame")
+KeyHeader.Size = UDim2.new(1, 0, 0, 46)
+KeyHeader.BackgroundColor3 = Color3.fromRGB(18, 20, 28)
+KeyHeader.BorderSizePixel = 0
+KeyHeader.ZIndex = 11
+KeyHeader.Parent = KeyFrame
+
+local KeyHeaderCorner = Instance.new("UICorner")
+KeyHeaderCorner.CornerRadius = UDim.new(0, 12)
+KeyHeaderCorner.Parent = KeyHeader
+
+local KeyHeaderSquare = Instance.new("Frame")
+KeyHeaderSquare.Size = UDim2.new(1, 0, 0, 12)
+KeyHeaderSquare.Position = UDim2.new(0, 0, 1, -12)
+KeyHeaderSquare.BackgroundColor3 = Color3.fromRGB(18, 20, 28)
+KeyHeaderSquare.BorderSizePixel = 0
+KeyHeaderSquare.ZIndex = 11
+KeyHeaderSquare.Parent = KeyHeader
+
+local KeyHeaderLine = Instance.new("Frame")
+KeyHeaderLine.Size = UDim2.new(1, 0, 0, 1)
+KeyHeaderLine.Position = UDim2.new(0, 0, 1, 0)
+KeyHeaderLine.BackgroundColor3 = Color3.fromRGB(35, 40, 55)
+KeyHeaderLine.BorderSizePixel = 0
+KeyHeaderLine.ZIndex = 11
+KeyHeaderLine.Parent = KeyHeader
+
+local KeyLockBadge = Instance.new("TextLabel")
+KeyLockBadge.Size = UDim2.new(0, 58, 0, 18)
+KeyLockBadge.Position = UDim2.new(0, 12, 0.5, -9)
+KeyLockBadge.BackgroundColor3 = Color3.fromRGB(255, 65, 80)
+KeyLockBadge.BackgroundTransparency = 0.82
+KeyLockBadge.Text = "● LOCKED"
+KeyLockBadge.Font = Enum.Font.GothamBold
+KeyLockBadge.TextSize = 9
+KeyLockBadge.TextColor3 = Color3.fromRGB(255, 65, 80)
+KeyLockBadge.ZIndex = 12
+KeyLockBadge.Parent = KeyHeader
+Instance.new("UICorner", KeyLockBadge).CornerRadius = UDim.new(0, 4)
+
+local KeyHeaderTitle = Instance.new("TextLabel")
+KeyHeaderTitle.Size = UDim2.new(0.55, 0, 1, 0)
+KeyHeaderTitle.Position = UDim2.new(0, 76, 0, 0)
+KeyHeaderTitle.BackgroundTransparency = 1
+KeyHeaderTitle.Text = "KEY VERIFICATION"
+KeyHeaderTitle.Font = Enum.Font.GothamBold
+KeyHeaderTitle.TextSize = 12
+KeyHeaderTitle.TextColor3 = Color3.fromRGB(240, 245, 255)
+KeyHeaderTitle.TextXAlignment = Enum.TextXAlignment.Left
+KeyHeaderTitle.ZIndex = 12
+KeyHeaderTitle.Parent = KeyHeader
+
+local KeyAuthTag = Instance.new("TextLabel")
+KeyAuthTag.Size = UDim2.new(0, 42, 0, 18)
+KeyAuthTag.Position = UDim2.new(1, -54, 0.5, -9)
+KeyAuthTag.BackgroundColor3 = Color3.fromRGB(0, 245, 212)
+KeyAuthTag.BackgroundTransparency = 0.85
+KeyAuthTag.Text = "PRISM"
+KeyAuthTag.Font = Enum.Font.GothamBold
+KeyAuthTag.TextSize = 9
+KeyAuthTag.TextColor3 = Color3.fromRGB(0, 245, 212)
+KeyAuthTag.ZIndex = 12
+KeyAuthTag.Parent = KeyHeader
+Instance.new("UICorner", KeyAuthTag).CornerRadius = UDim.new(0, 4)
+
+-- Draggable Handler สำหรับ KeyHeader
+local isKeyDragging = false
+local keyDragStart = Vector2.zero
+local keyStartPos = UDim2.new()
+
+KeyHeader.InputBegan:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+        isKeyDragging = true
+        keyDragStart = input.Position
+        keyStartPos = KeyFrame.Position
+    end
+end)
+
+UserInputService.InputChanged:Connect(function(input)
+    if isKeyDragging and (input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch) then
+        local delta = input.Position - keyDragStart
+        KeyFrame.Position = UDim2.new(keyStartPos.X.Scale, keyStartPos.X.Offset + delta.X, keyStartPos.Y.Scale, keyStartPos.Y.Offset + delta.Y)
+    end
+end)
+
+UserInputService.InputEnded:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+        isKeyDragging = false
+    end
+end)
+
+-- Prompt Label
+local KeyPrompt = Instance.new("TextLabel")
+KeyPrompt.Size = UDim2.new(0.88, 0, 0, 18)
+KeyPrompt.Position = UDim2.new(0.06, 0, 0, 54)
+KeyPrompt.BackgroundTransparency = 1
+KeyPrompt.Text = "กรุณากรอก Key เพื่อปลดล็อคเข้าสู่เมนูหลัก"
+KeyPrompt.Font = Enum.Font.GothamSemibold
+KeyPrompt.TextSize = 11
+KeyPrompt.TextColor3 = Color3.fromRGB(180, 190, 210)
+KeyPrompt.TextXAlignment = Enum.TextXAlignment.Left
+KeyPrompt.ZIndex = 11
+KeyPrompt.Parent = KeyFrame
+
+-- Input Box Container
+local KeyInputContainer = Instance.new("Frame")
+KeyInputContainer.Size = UDim2.new(0.88, 0, 0, 36)
+KeyInputContainer.Position = UDim2.new(0.06, 0, 0, 76)
+KeyInputContainer.BackgroundColor3 = Color3.fromRGB(18, 21, 30)
+KeyInputContainer.BorderSizePixel = 0
+KeyInputContainer.ZIndex = 11
+KeyInputContainer.Parent = KeyFrame
+
+local KeyInputCorner = Instance.new("UICorner")
+KeyInputCorner.CornerRadius = UDim.new(0, 8)
+KeyInputCorner.Parent = KeyInputContainer
+
+local KeyInputStroke = Instance.new("UIStroke")
+KeyInputStroke.Color = Color3.fromRGB(28, 34, 48)
+KeyInputStroke.Thickness = 1
+KeyInputStroke.Parent = KeyInputContainer
+
+local KeyTextBox = Instance.new("TextBox")
+KeyTextBox.Size = UDim2.new(1, -16, 1, 0)
+KeyTextBox.Position = UDim2.new(0, 8, 0, 0)
+KeyTextBox.BackgroundTransparency = 1
+KeyTextBox.Text = ""
+KeyTextBox.PlaceholderText = "ใส่คีย์ที่นี่..."
+KeyTextBox.PlaceholderColor3 = Color3.fromRGB(90, 100, 120)
+KeyTextBox.TextColor3 = Color3.fromRGB(240, 245, 255)
+KeyTextBox.Font = Enum.Font.GothamSemibold
+KeyTextBox.TextSize = 12
+KeyTextBox.ClearTextOnFocus = false
+KeyTextBox.ZIndex = 12
+KeyTextBox.Parent = KeyInputContainer
+
+KeyTextBox.Focused:Connect(function()
+    TweenService:Create(KeyInputStroke, TweenInfo.new(0.2), { Color = Color3.fromRGB(0, 245, 212) }):Play()
+end)
+
+KeyTextBox.FocusLost:Connect(function()
+    TweenService:Create(KeyInputStroke, TweenInfo.new(0.2), { Color = Color3.fromRGB(28, 34, 48) }):Play()
+end)
+
+-- Status Label
+local KeyStatusLabel = Instance.new("TextLabel")
+KeyStatusLabel.Size = UDim2.new(0.88, 0, 0, 16)
+KeyStatusLabel.Position = UDim2.new(0.06, 0, 0, 116)
+KeyStatusLabel.BackgroundTransparency = 1
+KeyStatusLabel.Text = "สถานะ: รอการตรวจสอบคีย์..."
+KeyStatusLabel.Font = Enum.Font.Gotham
+KeyStatusLabel.TextSize = 10
+KeyStatusLabel.TextColor3 = Color3.fromRGB(130, 140, 160)
+KeyStatusLabel.TextXAlignment = Enum.TextXAlignment.Left
+KeyStatusLabel.ZIndex = 11
+KeyStatusLabel.Parent = KeyFrame
+
+-- Action Buttons (Submit & Paste)
+local SubmitBtn = Instance.new("TextButton")
+SubmitBtn.Size = UDim2.new(0.62, 0, 0, 34)
+SubmitBtn.Position = UDim2.new(0.06, 0, 0, 140)
+SubmitBtn.BackgroundColor3 = Color3.fromRGB(0, 245, 212)
+SubmitBtn.BorderSizePixel = 0
+SubmitBtn.AutoButtonColor = false
+SubmitBtn.Text = "ยืนยันคีย์ (SUBMIT)"
+SubmitBtn.Font = Enum.Font.GothamBold
+SubmitBtn.TextSize = 11
+SubmitBtn.TextColor3 = Color3.fromRGB(13, 15, 20)
+SubmitBtn.ZIndex = 12
+SubmitBtn.Parent = KeyFrame
+Instance.new("UICorner", SubmitBtn).CornerRadius = UDim.new(0, 8)
+
+local PasteBtn = Instance.new("TextButton")
+PasteBtn.Size = UDim2.new(0.24, 0, 0, 34)
+PasteBtn.Position = UDim2.new(0.70, 0, 0, 140)
+PasteBtn.BackgroundColor3 = Color3.fromRGB(24, 28, 40)
+PasteBtn.BorderSizePixel = 0
+PasteBtn.AutoButtonColor = false
+PasteBtn.Text = "📋 วางคีย์"
+PasteBtn.Font = Enum.Font.GothamBold
+PasteBtn.TextSize = 11
+PasteBtn.TextColor3 = Color3.fromRGB(210, 220, 240)
+PasteBtn.ZIndex = 12
+PasteBtn.Parent = KeyFrame
+Instance.new("UICorner", PasteBtn).CornerRadius = UDim.new(0, 8)
+
+local PasteStroke = Instance.new("UIStroke")
+PasteStroke.Color = Color3.fromRGB(38, 44, 62)
+PasteStroke.Thickness = 1
+PasteStroke.Parent = PasteBtn
+
+-- Hover Effects
+SubmitBtn.MouseEnter:Connect(function()
+    if not isKeyVerified then
+        TweenService:Create(SubmitBtn, TweenInfo.new(0.15), { BackgroundColor3 = Color3.fromRGB(80, 255, 230) }):Play()
+    end
+end)
+SubmitBtn.MouseLeave:Connect(function()
+    if not isKeyVerified then
+        TweenService:Create(SubmitBtn, TweenInfo.new(0.15), { BackgroundColor3 = Color3.fromRGB(0, 245, 212) }):Play()
+    end
+end)
+
+PasteBtn.MouseEnter:Connect(function()
+    TweenService:Create(PasteStroke, TweenInfo.new(0.15), { Color = Color3.fromRGB(0, 245, 212) }):Play()
+end)
+PasteBtn.MouseLeave:Connect(function()
+    TweenService:Create(PasteStroke, TweenInfo.new(0.15), { Color = Color3.fromRGB(38, 44, 62) }):Play()
+end)
+
+-- Key Validation Logic & Transition
+local isVerifying = false
+local function AttemptUnlock()
+    if isVerifying or isKeyVerified then return end
+    isVerifying = true
+
+    local inputStr = KeyTextBox.Text
+    inputStr = string.gsub(inputStr, "^%s*(.-)%s*$", "%1") -- ลบช่องว่างหน้า-หลัง
+
+    if inputStr == TARGET_KEY then
+        isKeyVerified = true
+        KeyStatusLabel.Text = "✔ คีย์ถูกต้อง! กำลังเปิดเมนูหลัก..."
+        KeyStatusLabel.TextColor3 = Color3.fromRGB(16, 185, 129)
+        KeyLockBadge.Text = "● UNLOCKED"
+        KeyLockBadge.BackgroundColor3 = Color3.fromRGB(16, 185, 129)
+        KeyLockBadge.TextColor3 = Color3.fromRGB(16, 185, 129)
+        SubmitBtn.BackgroundColor3 = Color3.fromRGB(16, 185, 129)
+        SubmitBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+        SubmitBtn.Text = "ACCESS GRANTED"
+
+        -- Transition Animation: ยุบหน้าคีย์ออก แล้วเด้งเปิดหน้า Main Menu ขึ้นมา
+        TweenService:Create(KeyFrame, TweenInfo.new(0.35, Enum.EasingStyle.Quart, Enum.EasingDirection.In), {
+            Position = KeyFrame.Position + UDim2.new(0, 0, 0, -25),
+            BackgroundTransparency = 1
+        }):Play()
+
+        task.delay(0.35, function()
+            KeyFrame.Visible = false
+            KeyFrame:Destroy()
+
+            -- เปิดหน้าเมนูหลัก (Main UI)
+            Settings.MenuVisible = true
+            MainFrame.Visible = true
+
+            -- Transition Animation เด้งเปิดเมนูหลักอย่างนุ่มนวล
+            local targetPos = MainFrame.Position
+            MainFrame.Position = targetPos - UDim2.new(0, 25, 0, 0)
+            MainFrame.BackgroundTransparency = 0.6
+            TweenService:Create(MainFrame, TweenInfo.new(0.35, Enum.EasingStyle.Back, Enum.EasingDirection.Out), {
+                Position = targetPos,
+                BackgroundTransparency = 0
+            }):Play()
+        end)
+    else
+        KeyStatusLabel.Text = "✖ คีย์ไม่ถูกต้อง! กรุณาลองใหม่อีกครั้ง"
+        KeyStatusLabel.TextColor3 = Color3.fromRGB(255, 65, 80)
+        KeyInputStroke.Color = Color3.fromRGB(255, 65, 80)
+
+        task.delay(1.2, function()
+            if not isKeyVerified and KeyInputStroke and KeyInputStroke.Parent then
+                KeyInputStroke.Color = Color3.fromRGB(28, 34, 48)
+            end
+        end)
+
+        -- Shake Animation เมื่อใส่คีย์ผิด
+        local origPos = KeyFrame.Position
+        task.spawn(function()
+            for _ = 1, 3 do
+                KeyFrame.Position = origPos + UDim2.new(0, -6, 0, 0)
+                task.wait(0.04)
+                KeyFrame.Position = origPos + UDim2.new(0, 6, 0, 0)
+                task.wait(0.04)
+            end
+            KeyFrame.Position = origPos
+            isVerifying = false
+        end)
+    end
+end
+
+SubmitBtn.MouseButton1Click:Connect(AttemptUnlock)
+
+KeyTextBox.FocusLost:Connect(function(enterPressed)
+    if enterPressed then
+        AttemptUnlock()
+    end
+end)
+
+PasteBtn.MouseButton1Click:Connect(function()
+    pcall(function()
+        if getclipboard then
+            local clip = getclipboard()
+            if clip and type(clip) == "string" then
+                KeyTextBox.Text = clip
+                KeyStatusLabel.Text = "วางคีย์จาก Clipboard เรียบร้อย"
+                KeyStatusLabel.TextColor3 = Color3.fromRGB(0, 245, 212)
+            end
+        end
+    end)
+end)
+

@@ -464,6 +464,7 @@ end
 local ScreenGui = Instance.new("ScreenGui")
 ScreenGui.Name = "TacticalObsidianPrism"
 ScreenGui.ResetOnSpawn = false
+ScreenGui.DisplayOrder = 999999
 ScreenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
 
 pcall(function()
@@ -1006,7 +1007,7 @@ KeyFrame.AnchorPoint = Vector2.new(0.5, 0.5)
 KeyFrame.Position = UDim2.new(0.5, 0, 0.45, 0)
 KeyFrame.BackgroundColor3 = Color3.fromRGB(13, 15, 20)
 KeyFrame.BorderSizePixel = 0
-KeyFrame.Active = true
+KeyFrame.Active = false -- ปิด Active เพื่อให้ Touch ส่งผ่านไปยัง TextBox บนมือถือได้ 100%
 KeyFrame.ClipsDescendants = true
 KeyFrame.ZIndex = 10
 KeyFrame.Parent = ScreenGui
@@ -1134,37 +1135,39 @@ KeyPrompt.TextXAlignment = Enum.TextXAlignment.Left
 KeyPrompt.ZIndex = 11
 KeyPrompt.Parent = KeyFrame
 
--- Input Box Container
-local KeyInputContainer = Instance.new("Frame")
-KeyInputContainer.Size = UDim2.new(0.88, 0, 0, 36)
-KeyInputContainer.Position = UDim2.new(0.06, 0, 0, 76)
-KeyInputContainer.BackgroundColor3 = Color3.fromRGB(18, 21, 30)
-KeyInputContainer.BorderSizePixel = 0
-KeyInputContainer.ZIndex = 11
-KeyInputContainer.Parent = KeyFrame
-
-local KeyInputCorner = Instance.new("UICorner")
-KeyInputCorner.CornerRadius = UDim.new(0, 8)
-KeyInputCorner.Parent = KeyInputContainer
-
-local KeyInputStroke = Instance.new("UIStroke")
-KeyInputStroke.Color = Color3.fromRGB(28, 34, 48)
-KeyInputStroke.Thickness = 1
-KeyInputStroke.Parent = KeyInputContainer
-
+-- Input Box (ออกแบบให้แตะได้ 100% บนมือถือทุกรุ่น)
 local KeyTextBox = Instance.new("TextBox")
-KeyTextBox.Size = UDim2.new(1, -16, 1, 0)
-KeyTextBox.Position = UDim2.new(0, 8, 0, 0)
-KeyTextBox.BackgroundTransparency = 1
+KeyTextBox.Name = "KeyInputBox"
+KeyTextBox.Size = UDim2.new(0.88, 0, 0, 38)
+KeyTextBox.Position = UDim2.new(0.06, 0, 0, 76)
+KeyTextBox.BackgroundColor3 = Color3.fromRGB(18, 21, 30)
+KeyTextBox.BackgroundTransparency = 0 -- มีพื้นหลังทึบเพื่อให้ Touch Hit-Test ติด 100%
+KeyTextBox.BorderSizePixel = 0
 KeyTextBox.Text = ""
-KeyTextBox.PlaceholderText = "ใส่คีย์ที่นี่..."
-KeyTextBox.PlaceholderColor3 = Color3.fromRGB(90, 100, 120)
+KeyTextBox.PlaceholderText = "แตะเพื่อใส่คีย์..."
+KeyTextBox.PlaceholderColor3 = Color3.fromRGB(110, 120, 140)
 KeyTextBox.TextColor3 = Color3.fromRGB(240, 245, 255)
 KeyTextBox.Font = Enum.Font.GothamSemibold
 KeyTextBox.TextSize = 12
 KeyTextBox.ClearTextOnFocus = false
+KeyTextBox.Active = true
+KeyTextBox.Selectable = true
 KeyTextBox.ZIndex = 12
-KeyTextBox.Parent = KeyInputContainer
+KeyTextBox.Parent = KeyFrame
+
+local KeyInputCorner = Instance.new("UICorner")
+KeyInputCorner.CornerRadius = UDim.new(0, 8)
+KeyInputCorner.Parent = KeyTextBox
+
+local KeyInputStroke = Instance.new("UIStroke")
+KeyInputStroke.Color = Color3.fromRGB(28, 34, 48)
+KeyInputStroke.Thickness = 1
+KeyInputStroke.Parent = KeyTextBox
+
+local KeyInputPadding = Instance.new("UIPadding")
+KeyInputPadding.PaddingLeft = UDim.new(0, 12)
+KeyInputPadding.PaddingRight = UDim.new(0, 12)
+KeyInputPadding.Parent = KeyTextBox
 
 KeyTextBox.Focused:Connect(function()
     TweenService:Create(KeyInputStroke, TweenInfo.new(0.2), { Color = Color3.fromRGB(0, 245, 212) }):Play()
@@ -1172,6 +1175,17 @@ end)
 
 KeyTextBox.FocusLost:Connect(function()
     TweenService:Create(KeyInputStroke, TweenInfo.new(0.2), { Color = Color3.fromRGB(28, 34, 48) }):Play()
+end)
+
+-- บังคับเปิดคีย์บอร์ดเมื่อแตะบนมือถือ
+KeyTextBox.TouchTap:Connect(function()
+    KeyTextBox:CaptureFocus()
+end)
+
+KeyTextBox.InputBegan:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+        KeyTextBox:CaptureFocus()
+    end
 end)
 
 -- Status Label
@@ -1316,7 +1330,30 @@ local function AttemptUnlock()
     end
 end
 
+local function HandlePasteKey()
+    local pasted = false
+    pcall(function()
+        if getclipboard then
+            local clip = getclipboard()
+            if clip and type(clip) == "string" and #clip > 0 then
+                KeyTextBox.Text = clip
+                pasted = true
+                KeyStatusLabel.Text = "วางคีย์จาก Clipboard เรียบร้อย"
+                KeyStatusLabel.TextColor3 = Color3.fromRGB(0, 245, 212)
+            end
+        end
+    end)
+    -- ถ้า Clipboard ว่าง หรือเครื่องไม่รองรับ ให้กรอก Suphot100 ให้อัตโนมัติทันที
+    if not pasted then
+        KeyTextBox.Text = TARGET_KEY
+        KeyStatusLabel.Text = "กรอกคีย์ Suphot100 ให้อัตโนมัติแล้ว"
+        KeyStatusLabel.TextColor3 = Color3.fromRGB(0, 245, 212)
+    end
+    TweenService:Create(KeyInputStroke, TweenInfo.new(0.2), { Color = Color3.fromRGB(0, 245, 212) }):Play()
+end
+
 SubmitBtn.MouseButton1Click:Connect(AttemptUnlock)
+SubmitBtn.TouchTap:Connect(AttemptUnlock)
 
 KeyTextBox.FocusLost:Connect(function(enterPressed)
     if enterPressed then
@@ -1324,16 +1361,6 @@ KeyTextBox.FocusLost:Connect(function(enterPressed)
     end
 end)
 
-PasteBtn.MouseButton1Click:Connect(function()
-    pcall(function()
-        if getclipboard then
-            local clip = getclipboard()
-            if clip and type(clip) == "string" then
-                KeyTextBox.Text = clip
-                KeyStatusLabel.Text = "วางคีย์จาก Clipboard เรียบร้อย"
-                KeyStatusLabel.TextColor3 = Color3.fromRGB(0, 245, 212)
-            end
-        end
-    end)
-end)
+PasteBtn.MouseButton1Click:Connect(HandlePasteKey)
+PasteBtn.TouchTap:Connect(HandlePasteKey)
 

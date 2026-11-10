@@ -568,7 +568,7 @@ local dragStart = Vector2.zero
 local startPos = UDim2.new()
 
 Header.InputBegan:Connect(function(input)
-    if input.UserInputType == Enum.UserInputType.MouseButton1 then
+    if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
         isDragging = true
         dragStart = input.Position
         startPos = MainFrame.Position
@@ -576,14 +576,14 @@ Header.InputBegan:Connect(function(input)
 end)
 
 UserInputService.InputChanged:Connect(function(input)
-    if isDragging and input.UserInputType == Enum.UserInputType.MouseMovement then
+    if isDragging and (input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch) then
         local delta = input.Position - dragStart
         MainFrame.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + delta.X, startPos.Y.Scale, startPos.Y.Offset + delta.Y)
     end
 end)
 
 UserInputService.InputEnded:Connect(function(input)
-    if input.UserInputType == Enum.UserInputType.MouseButton1 then
+    if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
         isDragging = false
     end
 end)
@@ -853,6 +853,121 @@ KeyPill.Text = Settings.MenuKey.Name
 KeyPill.Parent = KeyCard
 Instance.new("UICorner", KeyPill).CornerRadius = UDim.new(0, 5)
 
+
+-- ----------------------------------------------------
+-- 5.1 Mobile Floating Toggle Button (ปุ่มเปิด-ปิดเมนูสำหรับมือถือ)
+-- ----------------------------------------------------
+local MobileToggleBtn = Instance.new("TextButton")
+MobileToggleBtn.Name = "MobileToggleBtn"
+MobileToggleBtn.Size = UDim2.new(0, 50, 0, 50)
+MobileToggleBtn.Position = UDim2.new(0.04, 0, 0.08, 0)
+MobileToggleBtn.BackgroundColor3 = Color3.fromRGB(13, 15, 20)
+MobileToggleBtn.BorderSizePixel = 0
+MobileToggleBtn.AutoButtonColor = false
+MobileToggleBtn.Text = ""
+MobileToggleBtn.Visible = false -- ซ่อนไว้จนกว่าจะใส่คีย์สำเร็จ
+MobileToggleBtn.Active = true
+MobileToggleBtn.ZIndex = 20
+MobileToggleBtn.Parent = ScreenGui
+
+local MobileCorner = Instance.new("UICorner")
+MobileCorner.CornerRadius = UDim.new(0, 14)
+MobileCorner.Parent = MobileToggleBtn
+
+local MobileStroke = Instance.new("UIStroke")
+MobileStroke.Thickness = 1.6
+MobileStroke.Color = Color3.fromRGB(255, 255, 255)
+MobileStroke.Parent = MobileToggleBtn
+
+local MobileStrokeGrad = Instance.new("UIGradient")
+MobileStrokeGrad.Color = ColorSequence.new({
+    ColorSequenceKeypoint.new(0, Color3.fromRGB(0, 245, 212)),
+    ColorSequenceKeypoint.new(0.5, Color3.fromRGB(123, 44, 191)),
+    ColorSequenceKeypoint.new(1, Color3.fromRGB(0, 245, 212))
+})
+MobileStrokeGrad.Rotation = 45
+MobileStrokeGrad.Parent = MobileStroke
+
+local MobileIcon = Instance.new("TextLabel")
+MobileIcon.Size = UDim2.new(1, 0, 0, 22)
+MobileIcon.Position = UDim2.new(0, 0, 0, 5)
+MobileIcon.BackgroundTransparency = 1
+MobileIcon.Text = "⚡"
+MobileIcon.TextSize = 16
+MobileIcon.TextColor3 = Color3.fromRGB(0, 245, 212)
+MobileIcon.ZIndex = 21
+MobileIcon.Parent = MobileToggleBtn
+
+local MobileText = Instance.new("TextLabel")
+MobileText.Size = UDim2.new(1, 0, 0, 16)
+MobileText.Position = UDim2.new(0, 0, 0, 27)
+MobileText.BackgroundTransparency = 1
+MobileText.Text = "MENU"
+MobileText.Font = Enum.Font.GothamBold
+MobileText.TextSize = 9
+MobileText.TextColor3 = Color3.fromRGB(240, 245, 255)
+MobileText.ZIndex = 21
+MobileText.Parent = MobileToggleBtn
+
+-- ฟังก์ชันสลับเปิด-ปิดเมนูหลัก
+local function ToggleMainMenu()
+    if not isKeyVerified then return end
+    Settings.MenuVisible = not Settings.MenuVisible
+    MainFrame.Visible = Settings.MenuVisible
+
+    -- แอนิเมชันยุบ-ขยายปุ่มเมื่อกด
+    TweenService:Create(MobileToggleBtn, TweenInfo.new(0.08, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
+        Size = UDim2.new(0, 44, 0, 44)
+    }):Play()
+    task.delay(0.08, function()
+        TweenService:Create(MobileToggleBtn, TweenInfo.new(0.14, Enum.EasingStyle.Back, Enum.EasingDirection.Out), {
+            Size = UDim2.new(0, 50, 0, 50)
+        }):Play()
+    end)
+end
+
+-- ระบบลากปุ่ม (Drag) สำหรับหน้าจอมือถือ (ไม่ให้สับสนระหว่างแตะกับลาก)
+local isMobileDragging = false
+local mobileDragMoved = false
+local mobileDragStart = Vector2.zero
+local mobileStartPos = UDim2.new()
+
+MobileToggleBtn.InputBegan:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+        isMobileDragging = true
+        mobileDragMoved = false
+        mobileDragStart = input.Position
+        mobileStartPos = MobileToggleBtn.Position
+    end
+end)
+
+UserInputService.InputChanged:Connect(function(input)
+    if isMobileDragging and (input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch) then
+        local delta = input.Position - mobileDragStart
+        if delta.Magnitude > 6 then
+            mobileDragMoved = true
+        end
+        MobileToggleBtn.Position = UDim2.new(
+            mobileStartPos.X.Scale,
+            mobileStartPos.X.Offset + delta.X,
+            mobileStartPos.Y.Scale,
+            mobileStartPos.Y.Offset + delta.Y
+        )
+    end
+end)
+
+UserInputService.InputEnded:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+        if isMobileDragging then
+            isMobileDragging = false
+            -- ถ้าไม่ได้ลาก แต่เป็นการแตะ (Tap) ให้เปิด/ปิดเมนู
+            if not mobileDragMoved then
+                ToggleMainMenu()
+            end
+        end
+    end
+end)
+
 local isListeningKey = false
 
 KeyCard.MouseButton1Click:Connect(function()
@@ -877,9 +992,7 @@ UserInputService.InputBegan:Connect(function(input, gameProcessed)
 
     if gameProcessed then return end
     if input.KeyCode == Settings.MenuKey then
-        if not isKeyVerified then return end -- ป้องกันการเปิดเมนูก่อนใส่คีย์
-        Settings.MenuVisible = not Settings.MenuVisible
-        MainFrame.Visible = Settings.MenuVisible
+        ToggleMainMenu()
     end
 end)
 
@@ -1157,9 +1270,16 @@ local function AttemptUnlock()
             KeyFrame.Visible = false
             KeyFrame:Destroy()
 
-            -- เปิดหน้าเมนูหลัก (Main UI)
+            -- เปิดหน้าเมนูหลัก (Main UI) และแสดงปุ่มลอยสำหรับมือถือ
             Settings.MenuVisible = true
             MainFrame.Visible = true
+            MobileToggleBtn.Visible = true
+
+            -- แอนิเมชันเด้งแสดงปุ่มมือถือ
+            MobileToggleBtn.Size = UDim2.new(0, 0, 0, 0)
+            TweenService:Create(MobileToggleBtn, TweenInfo.new(0.4, Enum.EasingStyle.Back, Enum.EasingDirection.Out), {
+                Size = UDim2.new(0, 50, 0, 50)
+            }):Play()
 
             -- Transition Animation เด้งเปิดเมนูหลักอย่างนุ่มนวล
             local targetPos = MainFrame.Position

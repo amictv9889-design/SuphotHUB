@@ -1,6 +1,6 @@
 --!strict
 -- TacticalHub V18: Obsidian Prism Edition (Peak Tier Cyber Aesthetics)
--- Hotkeys: ปุ่มเริ่มต้นคือ Right Shift (กดเปลี่ยนปุ่มบนหน้าเมนูได้ตลอดเวลา)
+-- Hotkeys: Right Shift
 
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
@@ -13,17 +13,17 @@ local LocalPlayer = Players.LocalPlayer
 local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
 
 -- ----------------------------------------------------
--- สถานะการทำงานของระบบ (Configuration State)
+-- Core Configuration State
 -- ----------------------------------------------------
 local Settings = {
-    MenuVisible = false, -- ซ่อนเมนูเริ่มต้น รอการปลดล็อคด้วยคีย์
+    MenuVisible = false,
     ESP = false,
     Aimlock = false,
     Snapline = true,
-    AimlockDistance = 150, -- ระยะล็อก (เมตร)
-    AimlockFOV = 140, -- รัศมีวงกลม FOV (พิกเซล)
-    StraightBullet = true, -- กระสุนเลเซอร์ตรง ไร้การกระจาย
-    BodyToHead = true, -- ยิงโดนตัวแต่สแนปเข้าหัวจริง 100%
+    AimlockDistance = 150,
+    AimlockFOV = 140,
+    StraightBullet = true,
+    BodyToHead = true,
     MenuKey = Enum.KeyCode.RightShift,
     ESPColor = Color3.fromRGB(255, 65, 80),
     FOVColor = Color3.fromRGB(0, 245, 212),
@@ -31,10 +31,26 @@ local Settings = {
 }
 
 local isKeyVerified = false
-local TARGET_KEY = "Suphot100" 
+local _KEY_HASH = 0x040ac41d
+local _KEY_LEN = 9
+
+local function VerifySecurityKey(inputKey)
+    if typeof(inputKey) ~= "string" or #inputKey ~= _KEY_LEN then
+        return false
+    end
+    local h = 2166136261
+    local salt = "SPH_TCT_2026"
+    for i = 1, #inputKey do
+        h = bit32.band(bit32.bxor(h, string.byte(inputKey, i)) * 16777619, 0xFFFFFFFF)
+    end
+    for i = 1, #salt do
+        h = bit32.band(bit32.bxor(h, string.byte(salt, i)) * 16777619, 0xFFFFFFFF)
+    end
+    return h == _KEY_HASH
+end
 
 -- ----------------------------------------------------
--- 1. Hook ระบบกระสุนตรง 100% ไร้การกระจาย (Zero Dispersion Laser)
+-- [1] Bullet Trajectory & Zero Dispersion Controller
 -- ----------------------------------------------------
 local GunController = nil
 local HitboxController = nil
@@ -146,7 +162,7 @@ RunService.RenderStepped:Connect(function()
 end)
 
 -- ----------------------------------------------------
--- 2. Hook ระบบ Snap เข้าหัว (True Coordinate Headshot)
+-- [2] Spatial Coordinate Resolver
 -- ----------------------------------------------------
 local function GetTargetHeadPosition(char)
     if not char then return nil end
@@ -213,7 +229,7 @@ if HitboxController then
 end
 
 -- ----------------------------------------------------
--- 3. ระบบ Overlay: FOV Circle + Target Snapline
+-- [3] Tactical Overlay Subsystem
 -- ----------------------------------------------------
 local OverlayGui = Instance.new("ScreenGui")
 OverlayGui.Name = "TacticalOverlayV18"
@@ -364,7 +380,7 @@ RunService.RenderStepped:Connect(function()
 end)
 
 -- ----------------------------------------------------
--- 4. ระบบ Enemy ESP
+-- [4] Visual Entity Matrix (ESP)
 -- ----------------------------------------------------
 local ESPCache = {}
 
@@ -482,7 +498,7 @@ MainFrame.BackgroundColor3 = Color3.fromRGB(13, 15, 20)
 MainFrame.BorderSizePixel = 0
 MainFrame.Active = true
 MainFrame.ClipsDescendants = true
-MainFrame.Visible = false -- ซ่อนหน้าเมนูไว้ จนกว่าจะใส่คีย์สำเร็จ
+MainFrame.Visible = false
 MainFrame.Parent = ScreenGui
 
 local MainCorner = Instance.new("UICorner")
@@ -565,7 +581,6 @@ VersionTag.TextColor3 = Color3.fromRGB(0, 245, 212)
 VersionTag.Parent = Header
 Instance.new("UICorner", VersionTag).CornerRadius = UDim.new(0, 4)
 
--- ปุ่มปิดเมนูบนแถบ Header สำหรับมือถือ (Close / Minimize Button)
 local HeaderCloseBtn = Instance.new("TextButton")
 HeaderCloseBtn.Name = "HeaderCloseBtn"
 HeaderCloseBtn.Size = UDim2.new(0, 26, 0, 26)
@@ -651,7 +666,6 @@ ListLayout.HorizontalAlignment = Enum.HorizontalAlignment.Center
 ListLayout.SortOrder = Enum.SortOrder.LayoutOrder
 ListLayout.Parent = ButtonContainer
 
--- Helper: สร้าง Animated Capsule Toggle Switch
 local function CreatePrismToggle(label, initialState, callback)
     local card = Instance.new("TextButton")
     card.Size = UDim2.new(1, 0, 0, 36)
@@ -736,13 +750,11 @@ local function CreatePrismToggle(label, initialState, callback)
     return card
 end
 
--- สร้าง 4 ปุ่ม Toggles ระดับพรีเมียม
 CreatePrismToggle("Enemy Visual Matrix (ESP)", Settings.ESP, function(v) SetESPActive(v) end)
 CreatePrismToggle("Hardware Aimlock [Hold RMB]", Settings.Aimlock, function(v) Settings.Aimlock = v end)
 CreatePrismToggle("Target Laser Snapline", Settings.Snapline, function(v) Settings.Snapline = v end)
 CreatePrismToggle("Redirect Cranial Damage", Settings.BodyToHead, function(v) Settings.BodyToHead = v end)
 
--- คอนโทรลเลอร์ Stepper ปรับระยะหวังผล (Aim Range)
 local RangeCard = Instance.new("Frame")
 RangeCard.Size = UDim2.new(1, 0, 0, 36)
 RangeCard.BackgroundColor3 = Color3.fromRGB(18, 21, 30)
@@ -804,7 +816,6 @@ RPlus.MouseButton1Click:Connect(function()
     refreshRangeText()
 end)
 
--- คอนโทรลเลอร์ Stepper ปรับขนาดวงกลม (FOV Radius)
 local FOVCard = Instance.new("Frame")
 FOVCard.Size = UDim2.new(1, 0, 0, 36)
 FOVCard.BackgroundColor3 = Color3.fromRGB(18, 21, 30)
@@ -866,7 +877,6 @@ FPlus.MouseButton1Click:Connect(function()
     refreshFOVText()
 end)
 
--- คอนโทรลเลอร์ Rebind ปุ่มเปิด-ปิดเมนู
 local KeyCard = Instance.new("TextButton")
 KeyCard.Size = UDim2.new(1, 0, 0, 36)
 KeyCard.BackgroundColor3 = Color3.fromRGB(18, 21, 30)
@@ -905,7 +915,7 @@ Instance.new("UICorner", KeyPill).CornerRadius = UDim.new(0, 5)
 
 
 -- ----------------------------------------------------
--- 5.1 Mobile Floating Toggle Button (ปุ่มเปิด-ปิดเมนูสำหรับมือถือ)
+-- [5.1] Floating Menu Controller
 -- ----------------------------------------------------
 local MobileToggleBtn = Instance.new("TextButton")
 MobileToggleBtn.Name = "MobileToggleBtn"
@@ -915,7 +925,7 @@ MobileToggleBtn.BackgroundColor3 = Color3.fromRGB(13, 15, 20)
 MobileToggleBtn.BorderSizePixel = 0
 MobileToggleBtn.AutoButtonColor = false
 MobileToggleBtn.Text = ""
-MobileToggleBtn.Visible = false -- ซ่อนไว้จนกว่าจะใส่คีย์สำเร็จ
+MobileToggleBtn.Visible = false
 MobileToggleBtn.Active = true
 MobileToggleBtn.ZIndex = 20
 MobileToggleBtn.Parent = ScreenGui
@@ -959,13 +969,11 @@ MobileText.TextColor3 = Color3.fromRGB(240, 245, 255)
 MobileText.ZIndex = 21
 MobileText.Parent = MobileToggleBtn
 
--- ฟังก์ชันสลับเปิด-ปิดเมนูหลัก (ใช้ร่วมกันทั้งปุ่มลอย, ปุ่มบน Header และปุ่มคีย์ลัด)
 ToggleMainMenu = function()
     if not isKeyVerified then return end
     Settings.MenuVisible = not Settings.MenuVisible
     MainFrame.Visible = Settings.MenuVisible
 
-    -- แอนิเมชันยุบ-ขยายปุ่มเมื่อกด
     TweenService:Create(MobileToggleBtn, TweenInfo.new(0.08, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
         Size = UDim2.new(0, 44, 0, 44)
     }):Play()
@@ -976,7 +984,6 @@ ToggleMainMenu = function()
     end)
 end
 
--- ระบบลากปุ่ม (Drag) สำหรับหน้าจอมือถือ (ไม่ให้สับสนระหว่างแตะกับลาก)
 local isMobileDragging = false
 local mobileDragMoved = false
 local mobileDragStart = Vector2.zero
@@ -1010,7 +1017,6 @@ UserInputService.InputEnded:Connect(function(input)
     if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
         if isMobileDragging then
             isMobileDragging = false
-            -- ถ้าไม่ได้ลาก แต่เป็นการแตะ (Tap) ให้เปิด/ปิดเมนู
             if not mobileDragMoved then
                 ToggleMainMenu()
             end
@@ -1056,7 +1062,7 @@ KeyFrame.AnchorPoint = Vector2.new(0.5, 0.5)
 KeyFrame.Position = UDim2.new(0.5, 0, 0.45, 0)
 KeyFrame.BackgroundColor3 = Color3.fromRGB(13, 15, 20)
 KeyFrame.BorderSizePixel = 0
-KeyFrame.Active = false -- ปิด Active เพื่อให้ Touch ส่งผ่านไปยัง TextBox บนมือถือได้ 100%
+KeyFrame.Active = false
 KeyFrame.ClipsDescendants = true
 KeyFrame.ZIndex = 10
 KeyFrame.Parent = ScreenGui
@@ -1145,7 +1151,6 @@ KeyAuthTag.ZIndex = 12
 KeyAuthTag.Parent = KeyHeader
 Instance.new("UICorner", KeyAuthTag).CornerRadius = UDim.new(0, 4)
 
--- Draggable Handler สำหรับ KeyHeader
 local isKeyDragging = false
 local keyDragStart = Vector2.zero
 local keyStartPos = UDim2.new()
@@ -1184,13 +1189,12 @@ KeyPrompt.TextXAlignment = Enum.TextXAlignment.Left
 KeyPrompt.ZIndex = 11
 KeyPrompt.Parent = KeyFrame
 
--- Input Box (ออกแบบให้แตะได้ 100% บนมือถือทุกรุ่น)
 local KeyTextBox = Instance.new("TextBox")
 KeyTextBox.Name = "KeyInputBox"
 KeyTextBox.Size = UDim2.new(0.88, 0, 0, 38)
 KeyTextBox.Position = UDim2.new(0.06, 0, 0, 76)
 KeyTextBox.BackgroundColor3 = Color3.fromRGB(18, 21, 30)
-KeyTextBox.BackgroundTransparency = 0 -- มีพื้นหลังทึบเพื่อให้ Touch Hit-Test ติด 100%
+KeyTextBox.BackgroundTransparency = 0
 KeyTextBox.BorderSizePixel = 0
 KeyTextBox.Text = ""
 KeyTextBox.PlaceholderText = "แตะเพื่อใส่คีย์..."
@@ -1226,7 +1230,6 @@ KeyTextBox.FocusLost:Connect(function()
     TweenService:Create(KeyInputStroke, TweenInfo.new(0.2), { Color = Color3.fromRGB(28, 34, 48) }):Play()
 end)
 
--- บังคับเปิดคีย์บอร์ดเมื่อแตะบนมือถือ
 KeyTextBox.TouchTap:Connect(function()
     KeyTextBox:CaptureFocus()
 end)
@@ -1310,9 +1313,9 @@ local function AttemptUnlock()
     isVerifying = true
 
     local inputStr = KeyTextBox.Text
-    inputStr = string.gsub(inputStr, "^%s*(.-)%s*$", "%1") -- ลบช่องว่างหน้า-หลัง
+    inputStr = string.gsub(inputStr, "^%s*(.-)%s*$", "%1")
 
-    if inputStr == TARGET_KEY then
+    if VerifySecurityKey(inputStr) then
         isKeyVerified = true
         KeyStatusLabel.Text = "✔ คีย์ถูกต้อง! กำลังเปิดเมนูหลัก..."
         KeyStatusLabel.TextColor3 = Color3.fromRGB(16, 185, 129)
@@ -1323,7 +1326,6 @@ local function AttemptUnlock()
         SubmitBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
         SubmitBtn.Text = "ACCESS GRANTED"
 
-        -- Transition Animation: ยุบหน้าคีย์ออก แล้วเด้งเปิดหน้า Main Menu ขึ้นมา
         TweenService:Create(KeyFrame, TweenInfo.new(0.35, Enum.EasingStyle.Quart, Enum.EasingDirection.In), {
             Position = KeyFrame.Position + UDim2.new(0, 0, 0, -25),
             BackgroundTransparency = 1
@@ -1333,18 +1335,15 @@ local function AttemptUnlock()
             KeyFrame.Visible = false
             KeyFrame:Destroy()
 
-            -- เปิดหน้าเมนูหลัก (Main UI) และแสดงปุ่มลอยสำหรับมือถือ
             Settings.MenuVisible = true
             MainFrame.Visible = true
             MobileToggleBtn.Visible = true
 
-            -- แอนิเมชันเด้งแสดงปุ่มมือถือ
             MobileToggleBtn.Size = UDim2.new(0, 0, 0, 0)
             TweenService:Create(MobileToggleBtn, TweenInfo.new(0.4, Enum.EasingStyle.Back, Enum.EasingDirection.Out), {
                 Size = UDim2.new(0, 50, 0, 50)
             }):Play()
 
-            -- Transition Animation เด้งเปิดเมนูหลักอย่างนุ่มนวล
             local targetPos = MainFrame.Position
             MainFrame.Position = targetPos - UDim2.new(0, 25, 0, 0)
             MainFrame.BackgroundTransparency = 0.6
@@ -1364,7 +1363,6 @@ local function AttemptUnlock()
             end
         end)
 
-        -- Shake Animation เมื่อใส่คีย์ผิด
         local origPos = KeyFrame.Position
         task.spawn(function()
             for _ = 1, 3 do
@@ -1392,11 +1390,9 @@ local function HandlePasteKey()
             end
         end
     end)
-    -- ถ้า Clipboard ว่าง หรือเครื่องไม่รองรับ ให้กรอก Suphot100 ให้อัตโนมัติทันที
     if not pasted then
-        KeyTextBox.Text = TARGET_KEY
-        KeyStatusLabel.Text = "กรอกคีย์ Suphot100 ให้อัตโนมัติแล้ว"
-        KeyStatusLabel.TextColor3 = Color3.fromRGB(0, 245, 212)
+        KeyStatusLabel.Text = "ไม่มีข้อมูลใน Clipboard (กรุณากรอกคีย์)"
+        KeyStatusLabel.TextColor3 = Color3.fromRGB(255, 180, 60)
     end
     TweenService:Create(KeyInputStroke, TweenInfo.new(0.2), { Color = Color3.fromRGB(0, 245, 212) }):Play()
 end

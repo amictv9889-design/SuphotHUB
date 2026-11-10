@@ -471,6 +471,8 @@ pcall(function()
     ScreenGui.Parent = PlayerGui
 end)
 
+local ToggleMainMenu = nil
+
 -- Main Background Frame
 local MainFrame = Instance.new("Frame")
 MainFrame.Name = "MainFrame"
@@ -541,7 +543,7 @@ LiveBadge.Parent = Header
 Instance.new("UICorner", LiveBadge).CornerRadius = UDim.new(0, 4)
 
 local HeaderTitle = Instance.new("TextLabel")
-HeaderTitle.Size = UDim2.new(0.6, 0, 1, 0)
+HeaderTitle.Size = UDim2.new(0.48, 0, 1, 0)
 HeaderTitle.Position = UDim2.new(0, 74, 0, 0)
 HeaderTitle.BackgroundTransparency = 1
 HeaderTitle.Text = "PROJECT SENTINEL"
@@ -552,8 +554,8 @@ HeaderTitle.TextXAlignment = Enum.TextXAlignment.Left
 HeaderTitle.Parent = Header
 
 local VersionTag = Instance.new("TextLabel")
-VersionTag.Size = UDim2.new(0, 42, 0, 18)
-VersionTag.Position = UDim2.new(1, -54, 0.5, -9)
+VersionTag.Size = UDim2.new(0, 38, 0, 18)
+VersionTag.Position = UDim2.new(1, -74, 0.5, -9)
 VersionTag.BackgroundColor3 = Color3.fromRGB(0, 245, 212)
 VersionTag.BackgroundTransparency = 0.85
 VersionTag.Text = "PRISM"
@@ -562,6 +564,53 @@ VersionTag.TextSize = 9
 VersionTag.TextColor3 = Color3.fromRGB(0, 245, 212)
 VersionTag.Parent = Header
 Instance.new("UICorner", VersionTag).CornerRadius = UDim.new(0, 4)
+
+-- ปุ่มปิดเมนูบนแถบ Header สำหรับมือถือ (Close / Minimize Button)
+local HeaderCloseBtn = Instance.new("TextButton")
+HeaderCloseBtn.Name = "HeaderCloseBtn"
+HeaderCloseBtn.Size = UDim2.new(0, 26, 0, 26)
+HeaderCloseBtn.Position = UDim2.new(1, -32, 0.5, -13)
+HeaderCloseBtn.BackgroundColor3 = Color3.fromRGB(26, 30, 44)
+HeaderCloseBtn.BorderSizePixel = 0
+HeaderCloseBtn.AutoButtonColor = false
+HeaderCloseBtn.Text = "✕"
+HeaderCloseBtn.Font = Enum.Font.GothamBold
+HeaderCloseBtn.TextSize = 12
+HeaderCloseBtn.TextColor3 = Color3.fromRGB(220, 230, 245)
+HeaderCloseBtn.Active = true
+HeaderCloseBtn.ZIndex = 9
+HeaderCloseBtn.Parent = Header
+
+local CloseCorner = Instance.new("UICorner")
+CloseCorner.CornerRadius = UDim.new(0, 7)
+CloseCorner.Parent = HeaderCloseBtn
+
+local CloseStroke = Instance.new("UIStroke")
+CloseStroke.Color = Color3.fromRGB(42, 50, 72)
+CloseStroke.Thickness = 1
+CloseStroke.Parent = HeaderCloseBtn
+
+HeaderCloseBtn.MouseEnter:Connect(function()
+    TweenService:Create(HeaderCloseBtn, TweenInfo.new(0.15), { BackgroundColor3 = Color3.fromRGB(255, 65, 80), TextColor3 = Color3.fromRGB(255, 255, 255) }):Play()
+    TweenService:Create(CloseStroke, TweenInfo.new(0.15), { Color = Color3.fromRGB(255, 65, 80) }):Play()
+end)
+
+HeaderCloseBtn.MouseLeave:Connect(function()
+    TweenService:Create(HeaderCloseBtn, TweenInfo.new(0.15), { BackgroundColor3 = Color3.fromRGB(26, 30, 44), TextColor3 = Color3.fromRGB(220, 230, 245) }):Play()
+    TweenService:Create(CloseStroke, TweenInfo.new(0.15), { Color = Color3.fromRGB(42, 50, 72) }):Play()
+end)
+
+HeaderCloseBtn.MouseButton1Click:Connect(function()
+    if ToggleMainMenu then
+        ToggleMainMenu()
+    end
+end)
+
+HeaderCloseBtn.TouchTap:Connect(function()
+    if ToggleMainMenu then
+        ToggleMainMenu()
+    end
+end)
 
 -- Smooth Draggable Handler
 local isDragging = false
@@ -910,8 +959,8 @@ MobileText.TextColor3 = Color3.fromRGB(240, 245, 255)
 MobileText.ZIndex = 21
 MobileText.Parent = MobileToggleBtn
 
--- ฟังก์ชันสลับเปิด-ปิดเมนูหลัก
-local function ToggleMainMenu()
+-- ฟังก์ชันสลับเปิด-ปิดเมนูหลัก (ใช้ร่วมกันทั้งปุ่มลอย, ปุ่มบน Header และปุ่มคีย์ลัด)
+ToggleMainMenu = function()
     if not isKeyVerified then return end
     Settings.MenuVisible = not Settings.MenuVisible
     MainFrame.Visible = Settings.MenuVisible
